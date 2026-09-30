@@ -48,8 +48,8 @@ fi
 # ---------------------------------------------------------------------------
 # 2) Migrations.
 # ---------------------------------------------------------------------------
-echo "[entrypoint] Aplicando migrations pendentes..."
-node "$PRISMA_CLI" migrate deploy
+echo "[entrypoint] Sincronizando schema com db push..."
+node "$PRISMA_CLI" db push --skip-generate
 
 # ---------------------------------------------------------------------------
 # 3) Seed idempotente.
