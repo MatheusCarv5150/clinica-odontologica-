@@ -1,0 +1,63 @@
+{
+  "name": "clinica_odontologica",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test:anamnesis": "node scripts/test-anamnesis.mjs",
+    "test:anamnesis-domain": "node scripts/domain-check.mjs",
+    "test:anamnesis-all": "node scripts/domain-check.mjs && node scripts/test-anamnesis.mjs",
+    "test:odontogram": "node scripts/test-odontogram.mjs",
+    "test:procedures": "node scripts/test-procedures.mjs",
+    "test:professionals": "node scripts/test-professionals.mjs",
+    "test:evolution": "node scripts/test-evolution.mjs",
+    "test:part10": "node scripts/test-part10.mjs",
+    "test:financial": "node scripts/test-financial.mjs",
+    "verify:financial-real": "node scripts/verify-financial-real.mjs",
+    "verify:despesas": "node scripts/verify-despesas.mjs",
+    "verify:cash-flow": "node scripts/verify-cash-flow.mjs",
+    "verify:reports": "node scripts/verify-reports.mjs"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
+    "@prisma/client": "5.22.0",
+    "@radix-ui/react-avatar": "^1.2.6",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-label": "^2.1.15",
+    "@radix-ui/react-popover": "^1.1.23",
+    "@radix-ui/react-select": "^2.3.7",
+    "@radix-ui/react-tabs": "^1.1.21",
+    "@radix-ui/react-toast": "^1.2.23",
+    "bcryptjs": "^3.0.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "google-auth-library": "^10.0.0",
+    "lucide-react": "^1.43.0",
+    "next": "16.3.4",
+    "prisma": "5.22.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-hook-form": "^7.87.0",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.production.js"
+  }
+}

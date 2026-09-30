@@ -1,0 +1,1676 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Patient {
+  id          String   @id @default(cuid())
+  fullName    String   @map("full_name")
+  cpf         String   @unique
+  phone       String?
+  birthDate   DateTime @map("birth_date")
+  healthNotes String?  @map("health_notes")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  appointments Appointment[]
+  // Registros clínicos versionados (perfil clínico do paciente).
+  anamnesisRecords AnamnesisRecord[]
+  // Registros específicos de atendimento (queixa do dia, observações).
+  anamnesisSessions Anamnesis[]
+  // Odontograma (Parte 5): eventos clínicos por dente + projeção do estado.
+  odontogramEvents OdontogramEvent[]
+  toothStates      ToothState[]
+  // Evolução clínica (Parte 6): registros de atendimento.
+  appointmentEvolutions AppointmentEvolution[]
+  // Procedimentos do atendimento (Parte 7): execução (previsto x realizado).
+  procedureExecutions AppointmentProcedureExecution[]
+  // Finalização do atendimento (Parte 9): trilha de encerramento clínico.
+  finalizationLogs AppointmentFinalizationLog[]
+
+  // Plano de tratamento (Parte 10.1): visão longitudinal do cuidado.
+  treatmentPlans     TreatmentPlan[]
+  treatmentPlanItems TreatmentPlanItem[]
+  // Prescrições (Parte 10.2): vinculadas ao paciente e ao atendimento.
+  prescriptions     Prescription[]
+  prescriptionItems PrescriptionItem[]
+  // Documentos/imagens clínicos (Parte 10.3).
+  documents PatientDocument[]
+
+  // FINANCEIRO (Financeiro 1): convênio, despesas e movimentações.
+  // O paciente é sempre resolvido pelo servidor a partir do contexto.
+  insurancePlan       InsurancePlan?         @relation(fields: [insurancePlanId], references: [id])
+  insurancePlanId     String?                @map("insurance_plan_id")
+  expenses            Expense[]
+  financialTransactions FinancialTransaction[]
+
+  @@index([insurancePlanId])
+  @@map("patients")
+}
+
+model Procedure {
+  id                String   @id @default(cuid())
+  name              String   @unique
+  category          String   @default("Outros")
+  code              String   @unique
+  defaultPrice      Float?   @map("default_price")
+  allowPriceOverride Boolean @default(true) @map("allow_price_override")
+  description       String?  @map("description")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  appointmentProcedures AppointmentProcedure[]
+  // Procedimentos do odontograma (Parte 5) que referenciam este catálogo.
+  // O catálogo NÃO é duplicado: o odontograma reutiliza os mesmos registros.
+  odontogramEvents OdontogramEvent[]
+
+  // Procedimentos registrados na evolução clínica (Parte 6).
+  procedureRecords AppointmentProcedureRecord[]
+  // Execuções de procedimento do atendimento (Parte 7).
+  procedureExecutions AppointmentProcedureExecution[]
+  // Itens de plano de tratamento que referenciam este procedimento (Parte 10.1).
+  // O catálogo NÃO é duplicado: o plano usa os MESMOS registros.
+  treatmentPlanItems TreatmentPlanItem[]
+
+  @@map("procedures")
+}
+
+model Appointment {
+  id              String   @id @default(cuid())
+  patientId       String   @map("patient_id")
+  appointmentDate DateTime @map("appointment_date")
+  appointmentTime String   @map("appointment_time")
+  status          String   @default("scheduled")
+  totalAmount     Float?   @map("total_amount")
+  // Observação do atendimento: anotação pontual ligada a ESTE registro.
+  notes String? @map("notes")
+
+  // ---------------------------------------------------------------------
+  // FINALIZAÇÃO DO ATENDIMENTO (Parte 9)
+  // ---------------------------------------------------------------------
+  // Encerramento formal do atendimento como registro clínico oficial.
+  // SALVAR ≠ FINALIZAR: salvar permite continuar depois; finalizar fecha o
+  // registro. Os campos abaixo são gravados EXCLUSIVAMENTE pelo backend
+  // (timestamps nunca vêm do navegador).
+  //
+  // started_at é o momento em que o atendimento passou a "in_progress"
+  // (registrado pela Parte 1). finished_at é o momento do encerramento.
+  // A duração do atendimento é DERIVADA (finishedAt - startedAt) — nunca
+  // digitada pelo usuário.
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  // Profissional responsável pela execução do atendimento (usuário autenticado
+  // que finalizou). O vínculo com o cadastro de profissionais é feito por id
+  // (`finished_by_id`), e a identidade é CONGELADA nos campos de snapshot
+  // abaixo no momento do encerramento — edições cadastrais futuras NÃO
+  // reescrevem o histórico.
+  finishedById   String? @map("finished_by_id")
+  finishedByName String? @map("finished_by_name")
+  // Snapshot do conselho profissional no momento da finalização (ex.: "CRO-PE
+  // 12345"). Nulo quando a identidade não corresponde a um profissional
+  // cadastrado (identidade textual legada).
+  finishedByCouncil String? @map("finished_by_council")
+
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  patient    Patient                 @relation(fields: [patientId], references: [id])
+  procedures AppointmentProcedure[]
+  payments   Payment[]
+  // FINANCEIRO (Financeiro 1): valores previstos e movimentações do atendimento.
+  // O convênio do atendimento é OPCIONAL e não altera `total_amount`.
+  insurancePlan        InsurancePlan?         @relation(fields: [insurancePlanId], references: [id])
+  insurancePlanId      String?                @map("insurance_plan_id")
+  expenses             Expense[]
+  financialTransactions FinancialTransaction[]
+
+  // ---------------------------------------------------------------------
+  // ANAMNESE (Parte 4)
+  // ---------------------------------------------------------------------
+  // Respostas específicas DESTE atendimento (queixa principal, história da
+  // queixa, hábitos relatados, histórico odontológico, medo/ansiedade e
+  // observações livres). Registro por atendimento: atendimentos anteriores
+  // mantêm o seu próprio registro, preservando o histórico clínico.
+  anamnesis Anamnesis?
+
+  // ---------------------------------------------------------------------
+  // ODONTOGRAMA (Parte 5)
+  // ---------------------------------------------------------------------
+  // Eventos clínicos registrados NESTE atendimento. O atendimento atual é o
+  // vínculo obrigatório de todo registro novo do odontograma (nada é lançado
+  // "solto" no histórico, sem contexto de atendimento).
+  odontogramEvents OdontogramEvent[]
+
+  // ---------------------------------------------------------------------
+  // EVOLUÇÃO CLÍNICA (Parte 6)
+  // ---------------------------------------------------------------------
+  // Registro clínico oficial do atendimento: queixa, achados, avaliação,
+  // conduta, procedimentos realizados, evolução, orientações, intercorrências
+  // e observações. Substitui o antigo campo "evolution" (texto simples)
+  // por um registro estruturado e auditável.
+  evolutionRecord AppointmentEvolution?
+
+  // ---------------------------------------------------------------------
+  // PROCEDIMENTOS DO ATENDIMENTO (Parte 7)
+  // ---------------------------------------------------------------------
+  // Execução dos procedimentos: o que estava previsto (Agenda) x o que foi
+  // realizado. O registro de execução NÃO substitui o item da Agenda
+  // (`procedures`), que permanece como registro histórico do que foi marcado.
+  procedureExecutions AppointmentProcedureExecution[]
+
+  // Trilha de finalização do atendimento (Parte 9): encerramento clínico.
+  finalizationLogs AppointmentFinalizationLog[]
+
+  // Prescrições emitidas neste atendimento (Parte 10.2).
+  prescriptions Prescription[]
+  // Documentos/imagens associados a este atendimento (Parte 10.3).
+  documents PatientDocument[]
+
+  @@map("appointments")
+}
+
+// ===========================================================================
+// FINALIZAÇÃO DO ATENDIMENTO — Módulo Atendimento (Parte 9)
+// ===========================================================================
+//
+// Trilha de auditoria do ciclo de encerramento do atendimento. Registra os
+// EVENTOS de fechamento (finalização, e futuras correções pós-fechamento),
+// permitindo reconstruir "quem fez, quando e de qual estado para qual estado".
+//
+// Diferente das trilhas de alteração de campo (anamnese/procedimentos), esta
+// registra a AÇÃO (evento) de encerramento clínico — é o carimbo oficial de
+// que o atendimento virou registro do prontuário.
+model AppointmentFinalizationLog {
+  id            String @id @default(cuid())
+  appointmentId String @map("appointment_id")
+  patientId     String @map("patient_id")
+  // Evento de auditoria: "ATENDIMENTO_FINALIZADO" (e futuros: correção, reabertura).
+  event String
+  // Transição de status observada (snapshot legível).
+  fromStatus String @map("from_status")
+  toStatus   String @map("to_status")
+  // Detalhes do momento do encerramento (também persistidos no atendimento).
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime  @map("finished_at")
+  // Usuário/profissional que realizou a finalização (autenticado, resolvido no
+  // servidor — nunca recebido cru do cliente).
+  performedById   String? @map("performed_by_id")
+  performedByName String? @map("performed_by_name")
+  // Resumo do que foi validado/consolidado (JSON serializado): contagens de
+  // procedimentos, presença de registro clínico, evolução, odontograma etc.
+  summary String? @map("summary")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  patient     Patient     @relation(fields: [patientId], references: [id])
+
+  @@index([appointmentId, createdAt])
+  @@index([patientId, createdAt])
+  @@map("appointment_finalization_logs")
+}
+
+model AppointmentProcedure {
+  id                  String   @id @default(cuid())
+  appointmentId       String   @map("appointment_id")
+  procedureId         String   @map("procedure_id")
+  procedureNameSnapshot String @map("procedure_name_snapshot")
+  unitPrice           Float    @map("unit_price")
+  quantity            Int      @default(1)
+  totalPrice          Float    @map("total_price")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  procedure   Procedure   @relation(fields: [procedureId], references: [id])
+
+  @@map("appointment_procedures")
+}
+
+model Payment {
+  id            String    @id @default(cuid())
+  appointmentId String    @map("appointment_id")
+  amount        Float
+  paymentMethod String    @map("payment_method")
+  status        String    @default("pending")
+  paidAt        DateTime? @map("paid_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+
+  // FINANCEIRO (Financeiro 1): o pagamento é a ORIGEM da movimentação de
+  // receita. A movimentação referencia este registro — o pagamento NÃO é
+  // duplicado. Um pagamento tem no máximo uma movimentação de caixa.
+  financialTransaction FinancialTransaction?
+
+  @@map("payments")
+}
+
+// ===========================================================================
+// ANAMNESE — Módulo Atendimento (Parte 4)
+// ===========================================================================
+//
+// Separação conceitual obrigatória:
+//
+// 1) PERFIL CLÍNICO DO PACIENTE (dado relativamente permanente, versionado)
+//    -> AnamnesisRecord: cada salvamento gera uma NOVA versão (append-only).
+//       O histórico nunca é sobrescrito; a versão anterior permanece para
+//       auditoria e consulta clínica.
+//    -> AnamnesisRecordItem: itens estruturados (doenças/condições, alergias,
+//       medicamentos, cirurgias/hospitalizações). Estrutura extensível: a
+//       lista de doenças NÃO é coluna rígida — é uma tabela de itens com
+//       checklist canônico no domínio + texto livre para "Outras".
+//    -> AnamnesisAnswer: respostas Sim/Não/Não informado das perguntas
+//       estruturadas (histórico médico, hábitos, histórico odontológico).
+//
+// 2) INFORMAÇÕES DO ATENDIMENTO ATUAL (Anamnesis)
+//    -> queixa principal e desdobramentos, medo/ansiedade relatados nesta
+//       consulta e observações livres do atendimento.
+
+// Registro versionado do perfil clínico do paciente.
+model AnamnesisRecord {
+  id        String   @id @default(cuid())
+  patientId String   @map("patient_id")
+  // Número sequencial da versão dentro do paciente (1, 2, 3...).
+  version   Int
+  // "patient" (perfil clínico) — campo explícito para permitir, no futuro,
+  // outros escopos sem confundir o significado do registro.
+  scope     String   @default("patient")
+  // Observações permanentes do perfil clínico do paciente.
+  notes     String?  @map("notes")
+  // Responsável pela alteração. A relação com usuários ainda não existe no
+  // schema; o campo é opcional e acompanhado do rótulo textual informado.
+  createdById   String?  @map("created_by_id")
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  answers AnamnesisAnswer[]
+  items   AnamnesisRecordItem[]
+  changes AnamnesisChangeLog[]
+  // Atendimentos que referenciam esta versão do perfil clínico.
+  sessions Anamnesis[]
+
+  @@unique([patientId, version])
+  @@index([patientId, createdAt])
+  @@map("anamnesis_records")
+}
+
+// Resposta estruturada de uma pergunta do perfil clínico.
+// value: "yes" | "no" | "unknown"
+model AnamnesisAnswer {
+  id     String @id @default(cuid())
+  recordId String @map("record_id")
+  // Identificador estável da pergunta no domínio (ver src/lib/anamnese.ts).
+  questionKey String @map("question_key")
+  // Agrupamento: "medical_history" | "habits" | "dental_history".
+  section String
+  value   String
+  // Permite complemento textual sem transformar a resposta em diagnóstico.
+  note    String?
+
+  record AnamnesisRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@unique([recordId, questionKey])
+  @@index([recordId, section])
+  @@map("anamnesis_answers")
+}
+
+// Item estruturado do perfil clínico (lista extensível).
+// type: "condition" | "allergy" | "medication" | "surgery"
+model AnamnesisRecordItem {
+  id       String @id @default(cuid())
+  recordId String @map("record_id")
+  type     String
+  // Chave canônica quando o item veio do checklist (ex.: "hipertensao").
+  // Nulo quando o item foi descrito livremente ("Outras").
+  itemKey  String? @map("item_key")
+  // Rótulo exibido (condição, substância, medicamento, procedimento).
+  label    String
+  // Campos específicos por tipo (usados apenas quando aplicáveis):
+  reaction  String? // alergias: reação observada
+  dosage    String? // medicamentos: dosagem
+  frequency String? // medicamentos: frequência
+  purpose   String? // medicamentos: finalidade, apenas se informada
+  year      String? // cirurgias: ano/período, quando conhecido
+  reason    String? // cirurgias: motivo
+  // Medicamentos ativos/inativos; demais tipos usam true por padrão.
+  active   Boolean @default(true)
+  note     String? @map("note")
+  // Nº de ordem para manter a sequência informada pelo profissional.
+  position Int     @default(0)
+
+  record AnamnesisRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([recordId, type])
+  @@map("anamnesis_record_items")
+}
+
+// Respostas específicas do atendimento + informações livres do momento.
+// Um registro por Appointment (relação 1:1).
+model Anamnesis {
+  id            String @id @default(cuid())
+  appointmentId String @unique @map("appointment_id")
+  // Mantido no registro para auditoria e consultas por paciente sem depender
+  // de join — jamais recebido do cliente.
+  patientId     String @map("patient_id")
+  // Versão do perfil clínico vigente quando este atendimento foi salvo.
+  clinicalRecordId String? @map("clinical_record_id")
+
+  // --- Queixa principal (atendimento atual) ---
+  chiefComplaint     String? @map("chief_complaint")
+  visitReason        String? @map("visit_reason")
+  complaintHistory   String? @map("complaint_history")
+  complaintOnset     String? @map("complaint_onset")
+  complaintDuration  String? @map("complaint_duration")
+  // "none" | "mild" | "moderate" | "severe" (lista controlada no domínio).
+  complaintIntensity String? @map("complaint_intensity")
+  associatedSymptoms String? @map("associated_symptoms")
+  complaintNotes     String? @map("complaint_notes")
+
+  // --- Hábitos / histórico odontológico relatados nesta consulta ---
+  // Complementam o perfil clínico sem sobrescrevê-lo.
+  habitsNotes String? @map("habits_notes")
+  dentalNotes String? @map("dental_notes")
+
+  // --- Medo / ansiedade odontológica (informação assistencial) ---
+  anxietyLevel String? @map("anxiety_level")
+  anxietyNotes String? @map("anxiety_notes")
+
+  // --- Observações livres do atendimento ---
+  notes String? @map("notes")
+
+  // --- Respostas específicas da consulta ---
+  sessionAnswers AnamnesisSessionAnswer[]
+
+  createdById   String?  @map("created_by_id")
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  appointment    Appointment      @relation(fields: [appointmentId], references: [id])
+  clinicalRecord AnamnesisRecord? @relation(fields: [clinicalRecordId], references: [id])
+  patient        Patient          @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@map("anamnesis")
+}
+
+// Resposta específica de uma pergunta no contexto do atendimento.
+model AnamnesisSessionAnswer {
+  id          String  @id @default(cuid())
+  anamnesisId String  @map("anamnesis_id")
+  questionKey String  @map("question_key")
+  section     String
+  value       String
+  note        String?
+
+  anamnesis Anamnesis @relation(fields: [anamnesisId], references: [id], onDelete: Cascade)
+
+  @@unique([anamnesisId, questionKey])
+  @@map("anamnesis_session_answers")
+}
+
+// Trilha de auditoria das alterações do perfil clínico do paciente.
+// Permite reconstruir "quem alterou / quando / de qual valor para qual valor".
+model AnamnesisChangeLog {
+  id        String @id @default(cuid())
+  recordId  String @map("record_id")
+  patientId String @map("patient_id")
+  // "answer" | "item" | "notes"
+  entity String
+  // questionKey (answer), itemKey/label (item) ou "notes".
+  field  String
+  // Rótulo legível do que mudou (ex.: "Hipertensão", "Alergia: Penicilina").
+  label  String
+  // Valores serializados para comparação e exibição do histórico.
+  oldValue String? @map("old_value")
+  newValue String? @map("new_value")
+  changedById   String? @map("changed_by_id")
+  changedByName String? @map("changed_by_name")
+  changedAt     DateTime @default(now()) @map("changed_at")
+
+  record AnamnesisRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  @@index([recordId, changedAt])
+  @@index([patientId, changedAt])
+  @@map("anamnesis_change_logs")
+}
+
+// ===========================================================================
+// ODONTOGRAMA — Módulo Atendimento (Parte 5)
+// ===========================================================================
+//
+// PRINCÍPIO FUNDAMENTAL:
+//   O DADO CLÍNICO É A FONTE DA VERDADE.
+//   O DESENHO DO ODONTOGRAMA É A REPRESENTAÇÃO VISUAL.
+//
+// Nunca armazenamos "a cor que o usuário pintou no dente". O desenho é sempre
+// derivado dos eventos clínicos estruturados abaixo.
+//
+// Separações conceituais garantidas pelo modelo:
+//
+// 1) CONDIÇÃO ≠ PROCEDIMENTO
+//    -> campo `kind`: "condition" | "procedure".
+//    -> Procedimento aponta para o catálogo REAL (`procedures`), sem duplicar.
+//
+// 2) ESTADO ATUAL ≠ HISTÓRICO
+//    -> OdontogramEvent: registro clínico append-only (o histórico).
+//       Nunca é sobrescrito: uma restauração não apaga o registro da cárie.
+//    -> ToothState: projeção do estado ATUAL do dente, recalculada a partir
+//       dos eventos. É o que o odontograma desenha.
+//
+// 3) PLANEJADO ≠ REALIZADO
+//    -> `status` do evento de procedimento: planned | performed | cancelled.
+//       A transição planned -> performed é o gancho do Plano de Tratamento.
+//
+// Numeração: FDI/ISO 3950 (toothNumber). Dentição: permanent | deciduous.
+
+// Evento clínico de um dente (append-only). Fonte de verdade do odontograma.
+model OdontogramEvent {
+  id        String @id @default(cuid())
+  // Paciente dono — resolvido SEMPRE a partir do atendimento, nunca do
+  // cliente (isolamento entre pacientes / LGPD).
+  patientId String @map("patient_id")
+  // Atendimento em que o evento foi registrado. Todo registro pertence a um
+  // atendimento, o que vincula odontograma, evolução e financeiro.
+  appointmentId String @map("appointment_id")
+
+  // Número FDI do dente (ex.: "26", "51").
+  toothNumber String @map("tooth_number")
+  // "permanent" | "deciduous" — as duas dentições nunca se misturam.
+  dentition   String
+
+  // "condition" | "procedure" — condição e procedimento são entidades
+  // distintas, com regras e catálogos diferentes.
+  kind String
+  // Código estável no catálogo de domínio (condições) ou do procedimento.
+  code String
+  // Rótulo no momento do registro (snapshot histórico: renomear o catálogo
+  // não reescreve o passado).
+  labelSnapshot String @map("label_snapshot")
+
+  // Superfícies afetadas: CSV normalizado e ordenado ("M,O" | "" | "V,L").
+  // Vazio significa evento do dente como um todo (ex.: ausente, mobilidade).
+  surfaces String @default("")
+
+  // "active" (condição) | "planned" | "performed" | "resolved" | "cancelled".
+  status String @default("active")
+
+  // --- Procedimento: reutiliza o catálogo EXISTENTE, com snapshot ---
+  procedureId            String?  @map("procedure_id")
+  procedureCodeSnapshot  String?  @map("procedure_code_snapshot")
+  procedurePriceSnapshot Float?   @map("procedure_price_snapshot")
+
+  // Observação clínica do profissional sobre ESTE registro.
+  notes String?
+  // Profissional responsável pelo registro. A relação com usuários ainda não
+  // existe; guardamos o rótulo informado (mesma abordagem da anamnese).
+  professionalName String? @map("professional_name")
+
+  // Data/hora clínica do evento. Normalmente o momento do registro no
+  // atendimento atual; em registros históricos representa o fato ocorrido.
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  patient     Patient     @relation(fields: [patientId], references: [id])
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  procedure   Procedure?  @relation(fields: [procedureId], references: [id])
+
+  // Histórico do dente = consulta direta por paciente + dente.
+  @@index([patientId, toothNumber, occurredAt])
+  @@index([patientId, occurredAt])
+  @@index([appointmentId])
+  @@map("odontogram_events")
+}
+
+// Projeção do estado ATUAL do dente — derivada dos eventos, mantida apenas
+// para consulta/desenho rápido. Não substitui o histórico.
+model ToothState {
+  id        String @id @default(cuid())
+  patientId String @map("patient_id")
+  // Número FDI do dente.
+  toothNumber String @map("tooth_number")
+  // "permanent" | "deciduous".
+  dentition   String
+
+  // Condição clínica que define a representação principal do dente
+  // (ex.: "healthy", "caries", "restored", "absent").
+  status String @default("healthy")
+  // Todas as condições ATIVAS do dente (CSV normalizado). Permite que o
+  // detalhe do dente liste múltiplas condições sem consultar o histórico.
+  conditionCodes String @default("") @map("condition_codes")
+
+  // Último evento aplicado a este estado (ordenação e depuração).
+  lastEventAt DateTime? @map("last_event_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@unique([patientId, toothNumber, dentition])
+  @@index([patientId, dentition])
+  @@map("tooth_states")
+}
+
+// ===========================================================================
+// EVOLUÇÃO CLÍNICA — Módulo Atendimento (Parte 6)
+// ===========================================================================
+//
+// Registro clínico oficial do atendimento. Cada atendimento possui no
+// máximo UM registro de evolução (relação 1:1 com Appointment).
+//
+// Princípios:
+// - O registro é vinculado ao atendimento atual (não ao paciente diretamente).
+// - O profissional é responsável pelo conteúdo (nenhuma inferência automática).
+// - A finalização marca o encerramento do registro clínico daquele atendimento.
+// - Alterações após a finalização são rastreadas na trilha de auditoria.
+// - Procedimentos referenciados usam o catálogo EXISTENTE (não duplicado).
+// - A relação com o odontograma é por referência (dente + superfície + condição),
+//   não por duplicação de dados clínicos.  // Os itens EXECUTADOS são materializados na tabela canônica
+  // `appointment_procedures` (Parte 7), garantindo UMA única fonte para o
+  // que foi realizado no atendimento (sem duplicar procedimentos).
+model AppointmentEvolution {
+  id        String   @id @default(cuid())
+  // Vínculo obrigatório com o atendimento.
+  appointmentId String @unique @map("appointment_id")
+  // Paciente dono — resolvido SEMPRE a partir do atendimento.
+  patientId     String @map("patient_id")
+
+  // --- Registro clínico estruturado ---
+  chiefComplaint     String? @map("chief_complaint")
+  clinicalFindings   String? @map("clinical_findings")
+  evaluation         String? @map("evaluation")
+  conduct            String? @map("conduct")
+  evolution          String? @map("evolution")
+  guidance           String? @map("guidance")
+  intercurrentHas    Boolean @default(false) @map("intercurrent_has")
+  intercurrentDesc   String? @map("intercurrent_desc")
+  observations       String? @map("observations")
+
+  // --- Finalização ---
+  finalized      Boolean  @default(false)
+  finalizedAt    DateTime? @map("finalized_at")
+  finalizedById  String?   @map("finalized_by_id")
+  finalizedByName String?  @map("finalized_by_name")
+
+  // --- Auditoria ---
+  createdById   String?  @map("created_by_id")
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  patient     Patient     @relation(fields: [patientId], references: [id])
+
+  // Procedimentos registrados nesta evolução (referenciam o catálogo existente).
+  procedureRecords AppointmentProcedureRecord[]
+
+  @@index([patientId])
+  @@index([appointmentId])
+  @@map("appointment_evolutions")
+}
+
+// Registro de procedimento dentro da evolução clínica.
+// Vincula o procedimento do catálogo ao dente/superfície/atendimento.
+model AppointmentProcedureRecord {
+  id                  String   @id @default(cuid())
+  evolutionId         String   @map("evolution_id")
+  // Referência ao catálogo REAL de procedimentos.
+  procedureId         String   @map("procedure_id")
+  procedureNameSnapshot String @map("procedure_name_snapshot")
+  // Dente referenciado (FDI/ISO).
+  toothNumber         String?  @map("tooth_number")
+  // "permanent" | "deciduous"
+  dentition           String?
+  // Superfícies (CSV normalizado e ordenado, ex.: "M,O").
+  surfaces            String   @default("") @map("surfaces")
+  // Status no contexto deste atendimento.
+  status              String   @default("performed")
+  // Material utilizado (texto livre, sem controle de estoque).
+  material            String?  @map("material")
+  // Observação clínica sobre este procedimento.
+  notes               String?  @map("notes")
+  professionalName    String?  @map("professional_name")
+  // Data/hora do registro.
+  occurredAt          DateTime @default(now()) @map("occurred_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  evolution AppointmentEvolution @relation(fields: [evolutionId], references: [id], onDelete: Cascade)
+  procedure Procedure              @relation(fields: [procedureId], references: [id])
+
+  @@index([evolutionId])
+  @@index([procedureId])
+  @@map("appointment_procedure_records")
+}
+
+// ===========================================================================
+// PROCEDIMENTOS DO ATENDIMENTO — Módulo Atendimento (Parte 7)
+// ===========================================================================
+//
+// OBJETIVO: responder "o que estava previsto para este paciente hoje e o que
+// realmente foi feito?", separando com clareza:
+//
+//   1) PREVISTO / AGENDADO — o que veio da Agenda (AppointmentProcedure).
+//      Registro histórico imutável: NUNCA é removido nem sobrescrito.
+//
+//   2) REALIZADO / NÃO REALIZADO / CANCELADO — a EXECUÇÃO registrada durante
+//      o atendimento (AppointmentProcedureExecution).
+//
+//   3) ADICIONADO NO ATENDIMENTO — procedimento identificado na consulta que
+//      não estava na Agenda (também uma execução, com origem explícita).
+//
+// PRINCÍPIOS GARANTIDOS PELO MODELO:
+//
+// - FONTE ÚNICA DE EXECUÇÃO. A Agenda continua dona do "previsto". A execução
+//   é registrada aqui e, quando envolve um dente, gera o evento clínico
+//   correspondente no ODONTOGRAMA (que já é a fonte da verdade odontológica).
+//   Não existe uma segunda estrutura de dentes nem um segundo catálogo: o
+//   procedimento aponta para o catálogo REAL (`procedures`) com snapshot.
+//
+// - PREVISTO ≠ REALIZADO. A execução referencia o item da Agenda de origem
+//   (`scheduledProcedureId`) quando existir, mas mantém seus PRÓPRIOS valores
+//   realizados (valor, dente, superfície). Assim, um valor realizado diferente
+//   do previsto fica explícito — sem alterar o registro da Agenda.
+//
+// - VALORES EM CAMADAS. `catalogPriceSnapshot` (preço do catálogo no momento),
+//   `expectedPrice` (valor previsto na Agenda) e `performedPrice` (valor
+//   efetivamente realizado) nunca se sobrescrevem entre si.
+//
+// - HISTÓRICO PRESERVADO. Valores e nomes são gravados como SNAPSHOT: renomear
+//   ou reprecificar o catálogo não reescreve o passado. Um item não realizado
+//   permanece registrado (com motivo) para auditoria.
+//
+// - PREPARADO PARA O FUTURO. `procedurePlan` prepara a ligação com o Plano de
+//   Tratamento; a execução carrega o valor realizado que o Financeiro irá
+//   consolidar (sem criar pagamentos nesta etapa — evento `procedure_execution`).
+
+model AppointmentProcedureExecution {
+  id            String @id @default(cuid())
+  appointmentId String @map("appointment_id")
+  // Paciente dono — resolvido SEMPRE a partir do atendimento, nunca do cliente.
+  patientId     String @map("patient_id")
+
+  // --- Procedimento do catálogo REAL (com snapshot histórico) ---
+  procedureId           String  @map("procedure_id")
+  procedureNameSnapshot String  @map("procedure_name_snapshot")
+  procedureCodeSnapshot String? @map("procedure_code_snapshot")
+
+  // --- Origem do registro ---
+  // "scheduled" | "added_in_attendance"
+  origin String @default("scheduled")
+  // Item da Agenda que originou este registro (quando veio da Agenda).
+  // onDelete SetNull: preserva a execução mesmo se o vínculo for removido —
+  // o histórico NUNCA é apagado em cascata.
+  scheduledProcedureId String? @map("scheduled_procedure_id")
+
+  // --- Status da execução ---
+  // "pending" | "in_progress" | "performed" | "not_performed" | "cancelled"
+  status String @default("pending")
+
+  // --- Motivo de não realização (auditoria) ---
+  // Código controlado no domínio ("patient_not_authorized", "postponed", ...).
+  reasonCode String? @map("reason_code")
+  reasonNote String? @map("reason_note")
+
+  // --- Dente / superfície (opcionais: há procedimentos sem dente) ---
+  toothNumber String? @map("tooth_number")
+  dentition   String?
+  // Superfícies (CSV normalizado e ordenado, ex.: "M,O").
+  surfaces    String  @default("")
+
+  // --- Valores em camadas (nunca se sobrescrevem) ---
+  // Preço do catálogo no momento do registro.
+  catalogPriceSnapshot Float? @map("catalog_price_snapshot")
+  // Valor previsto, herdado da Agenda quando o item veio dela.
+  expectedPrice        Float? @map("expected_price")
+  // Valor efetivamente realizado neste atendimento.
+  performedPrice       Float? @map("performed_price")
+
+  // --- Observação clínica sobre ESTE registro ---
+  notes String?
+
+  // --- Profissional responsável (rótulo; relação de usuários ainda não existe) ---
+  professionalName String? @map("professional_name")
+
+  // --- Relação com o ODONTOGRAMA (evento clínico gerado, quando houver dente) ---
+  odontogramEventId String? @map("odontogram_event_id")
+
+  // --- Preparação para o PLANO DE TRATAMENTO (Parte futura) ---
+  procedurePlanId String? @map("procedure_plan_id")
+
+  // --- Datas ---
+  // Data/hora da execução (informada pelo servidor).
+  performedAt DateTime? @map("performed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  patient     Patient     @relation(fields: [patientId], references: [id])
+  procedure   Procedure   @relation(fields: [procedureId], references: [id])
+
+  @@index([appointmentId])
+  @@index([patientId, performedAt])
+  @@index([procedureId])
+  @@map("appointment_procedure_executions")
+}
+
+// Trilha de auditoria das alterações de execução de procedimento (Parte 7).
+// Permite reconstruir "quem alterou / quando / de qual valor para qual valor",
+// inclusive a origem do registro e a relação com o odontograma.
+model ProcedureExecutionChangeLog {
+  id          String @id @default(cuid())
+  executionId String @map("execution_id")
+  patientId   String @map("patient_id")
+  // "status" | "value" | "tooth" | "reason" | "notes" | "created"
+  field  String
+  label  String
+  oldValue String? @map("old_value")
+  newValue String? @map("new_value")
+  changedById   String? @map("changed_by_id")
+  changedByName String? @map("changed_by_name")
+  changedAt     DateTime @default(now()) @map("changed_at")
+
+  @@index([executionId, changedAt])
+  @@index([patientId, changedAt])
+  @@map("procedure_execution_change_logs")
+}
+
+// ===========================================================================
+// PLANO DE TRATAMENTO — Módulo Atendimento (Parte 10.1)
+// ===========================================================================
+//
+// VISÃO LONGITUDINAL do cuidado: não é uma lista de procedimentos, é o
+// planejamento clínico que responde "para onde o tratamento está indo".
+//
+// PRINCÍPIOS GARANTIDOS PELO MODELO
+//
+// - NÃO DUPLICA O CATÁLOGO. Cada item de plano referencia o procedimento REAL
+//   (`procedures`) com snapshot do nome/código/preço no momento do
+//   planejamento. Renomear/reprecificar o catálogo não reescreve o passado.
+//
+// - NÃO DUPLICA O ODONTOGRAMA. O dente é identificado pelo MESMO número FDI
+//   usado pelo odontograma (`toothNumber`), com as mesmas superfícies (CSV
+//   canônico M,D,O,V,L). Não existe segunda numeração de dentes.
+//
+// - PLANEJADO ≠ REALIZADO. O item planejado NÃO altera o estado clínico do
+//   dente nem cria execução. Quando o profissional executa o procedimento no
+//   atendimento (Parte 7), a execução pode apontar de volta para o item do
+//   plano (`planItemId`) e o item pode refletir o andamento — mas a transição
+//   de status é sempre uma AÇÃO EXPLÍCITA e auditável (nunca automática).
+//
+// - HISTÓRICO PRESERVADO. Mudanças de status são registradas em
+//   `TreatmentPlanItemChangeLog` (status anterior, novo status, data, autor).
+//   Itens não são apagados: são cancelados/não realizados, mantendo a trilha.
+//
+// - ETAPAS OPCIONAIS. Um plano simples não exige etapas; `stage` é um texto
+//   curto opcional (ex.: "Etapa 3 — Restaurações") + `stageOrder` para ordenar.
+
+// Plano de tratamento do paciente (longitudinal, independente do atendimento).
+model TreatmentPlan {
+  id        String @id @default(cuid())
+  // Paciente dono — resolvido SEMPRE a partir do atendimento no servidor.
+  patientId String @map("patient_id")
+
+  // Título curto do plano (ex.: "Plano de Reabilitação Oral").
+  title       String
+  // Descrição/objetivo do plano.
+  description String?
+  // Observações livres do profissional.
+  notes       String?
+
+  // "draft" | "active" | "completed" | "cancelled"
+  status String @default("active")
+
+  // Profissional responsável (identidade textual enquanto não há módulo de
+  // usuários — mesma abordagem da anamnese/evolução/procedimentos).
+  professionalName String? @map("professional_name")
+
+  // Data de referência informada para o plano (planejamento pode ser futuro).
+  plannedDate DateTime? @map("planned_date")
+
+  // Rastreabilidade de origem: o plano pode nascer dentro de um atendimento,
+  // mas continua válido ao longo do tempo (por isso não é filho do atendimento).
+  createdInAppointmentId String? @map("created_in_appointment_id")
+
+  createdById   String?  @map("created_by_id")
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  patient Patient             @relation(fields: [patientId], references: [id])
+  items   TreatmentPlanItem[]
+
+  @@index([patientId, createdAt])
+  @@map("treatment_plans")
+}
+
+// Item de um plano de tratamento. Referencia o catálogo REAL de procedimentos
+// e usa a MESMA identificação de dente/superfície do odontograma.
+model TreatmentPlanItem {
+  id       String @id @default(cuid())
+  planId   String @map("plan_id")
+  // Paciente dono — desnormalizado para consultas/isolamento sem join.
+  patientId String @map("patient_id")
+
+  // --- Procedimento do catálogo REAL (com snapshot) ---
+  procedureId           String? @map("procedure_id")
+  procedureNameSnapshot String  @map("procedure_name_snapshot")
+  procedureCodeSnapshot String? @map("procedure_code_snapshot")
+
+  // --- Dente/superfície: MESMA convenção do odontograma (FDI + M,D,O,V,L) ---
+  toothNumber String? @map("tooth_number")
+  dentition   String?
+  surfaces    String  @default("")
+
+  // Descrição/observação clínica específica do item.
+  description String?
+
+  // "low" | "medium" | "high" | "urgent"
+  priority String @default("medium")
+
+  // Valores PREVISTOS (planejamento — nunca sobrescreve o realizado).
+  expectedPrice Float? @map("expected_price")
+  quantity      Int    @default(1)
+
+  // Organização: etapa opcional + ordem dentro do plano.
+  stage      String? @map("stage")
+  stageOrder Int     @default(0)
+  position   Int     @default(0)
+
+  // Estado do item:
+  // "planned" | "awaiting_start" | "in_progress" | "partially_done" |
+  // "completed" | "cancelled" | "not_done"
+  status String @default("planned")
+
+  // Data prevista para execução (opcional).
+  plannedDate DateTime? @map("planned_date")
+
+  notes String? @map("notes")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  plan      TreatmentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  patient   Patient       @relation(fields: [patientId], references: [id])
+  procedure Procedure?    @relation(fields: [procedureId], references: [id])
+  changes   TreatmentPlanItemChangeLog[]
+
+  @@index([planId, position])
+  @@index([patientId, status])
+  @@index([procedureId])
+  @@map("treatment_plan_items")
+}
+
+// Trilha de auditoria do item do plano (status/anexações/replanejamento).
+// Registra "de qual status para qual status", quando e por quem.
+model TreatmentPlanItemChangeLog {
+  id         String @id @default(cuid())
+  itemId     String @map("item_id")
+  patientId  String @map("patient_id")
+  // "status" | "created" | "updated" | "tooth" | "planned"
+  field      String
+  label      String
+  oldValue   String? @map("old_value")
+  newValue   String? @map("new_value")
+  // Motivo do replanejamento/cancelamento (auditoria clínica).
+  reason     String? @map("reason")
+  changedById   String?  @map("changed_by_id")
+  changedByName String?  @map("changed_by_name")
+  changedAt     DateTime @default(now()) @map("changed_at")
+
+  item TreatmentPlanItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, changedAt])
+  @@index([patientId, changedAt])
+  @@map("treatment_plan_item_change_logs")
+}
+
+// ===========================================================================
+// PRESCRIÇÃO — Módulo Atendimento (Parte 10.2)
+// ===========================================================================
+//
+// Ferramenta CLÍNICA prática: registrar a prescrição vinculada ao paciente e ao
+// atendimento. Não é um sistema farmacêutico — nenhum medicamento é sugerido,
+// inserido ou inferido automaticamente.
+//
+// - A prescrição pertence ao PACIENTE e referencia o ATENDIMENTO de origem
+//   (opcional quando o profissional prescribe fora de uma consulta).
+// - O profissional responsável é sempre registrado (identidade textual).
+// - Estados: "draft" | "issued" | "cancelled". Uma prescrição EMITIDA nunca é
+//   apagada: é cancelada com data/autor/motivo (registro preservado).
+// - `PrescriptionItem` guarda os campos clínicos por medicamento/item.
+// - `PrescriptionLog` registra criação/emissão/cancelamento para auditoria.
+
+model Prescription {
+  id        String @id @default(cuid())
+  patientId String @map("patient_id")
+  // Atendimento de origem (nullable: prescrição pode existir fora de consulta).
+  appointmentId String? @map("appointment_id")
+
+  // "draft" | "issued" | "cancelled"
+  status String @default("draft")
+
+  // Orientações gerais / observações da prescrição.
+  notes       String?
+  // Orientações ao paciente (texto livre, sem inferência).
+  guidance    String?
+
+  // Profissional responsável (identidade textual).
+  professionalName String? @map("professional_name")
+
+  // Momento da emissão (definido pelo servidor) e do cancelamento.
+  issuedAt      DateTime? @map("issued_at")
+  cancelledAt   DateTime? @map("cancelled_at")
+  cancelReason  String?   @map("cancel_reason")
+  cancelledById String?   @map("cancelled_by_id")
+  cancelledByName String? @map("cancelled_by_name")
+
+  createdById   String?  @map("created_by_id")
+  createdByName String?  @map("created_by_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  patient     Patient            @relation(fields: [patientId], references: [id])
+  appointment Appointment?       @relation(fields: [appointmentId], references: [id])
+  items       PrescriptionItem[]
+  logs        PrescriptionLog[]
+
+  @@index([patientId, createdAt])
+  @@index([appointmentId])
+  @@map("prescriptions")
+}
+
+// Item/medicamento de uma prescrição. Todos os campos são OPCIONAIS exceto o
+// nome — o profissional deve conseguir registrar uma prescrição simples rápido.
+model PrescriptionItem {
+  id             String @id @default(cuid())
+  prescriptionId String @map("prescription_id")
+  patientId      String @map("patient_id")
+
+  // Nome do medicamento/produto (único campo obrigatório do item).
+  name String
+  // Princípio ativo, quando informado.
+  activeIngredient String? @map("active_ingredient")
+  // Apresentação (ex.: "Comprimido", "Solução oral").
+  presentation String?
+  // Concentração (ex.: "500 mg").
+  concentration String?
+  // Quantidade + unidade (ex.: 21 + "cápsulas").
+  quantity Float?
+  unit     String?
+  // Via de administração (texto livre controlado na UI: Oral, Tópica, etc.).
+  route String?
+  // Dose por tomada (ex.: "1 cápsula").
+  dose String?
+  // Frequência/intervalo (ex.: "8 em 8 horas").
+  frequency String?
+  duration  String?
+  // Instruções específicas do item.
+  instructions String?
+  observations String?
+
+  position Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  patient      Patient      @relation(fields: [patientId], references: [id])
+
+  @@index([prescriptionId, position])
+  @@index([patientId])
+  @@map("prescription_items")
+}
+
+// Trilha de auditoria da prescrição (criação, emissão, cancelamento).
+model PrescriptionLog {
+  id             String @id @default(cuid())
+  prescriptionId String @map("prescription_id")
+  patientId      String @map("patient_id")
+  // "created" | "updated" | "issued" | "cancelled"
+  event String
+  label String
+  notes String?
+  performedById   String?  @map("performed_by_id")
+  performedByName String?  @map("performed_by_name")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId, createdAt])
+  @@index([patientId, createdAt])
+  @@map("prescription_logs")
+}
+
+// ===========================================================================
+// DOCUMENTOS / IMAGENS — Módulo Atendimento (Parte 10.3)
+// ===========================================================================
+//
+// Área de arquivos clínicos do paciente: radiografias, fotos intra/extraorais,
+// exames, PDFs e documentos relacionados ao atendimento.
+//
+// - O arquivo pertence ao PACIENTE; opcionalmente referencia o ATENDIMENTO.
+// - Metadados (nome original, tipo, tamanho, categoria, dente quando aplicável)
+//   são persistidos; o CONTEÚDO é armazenado em disco via provedor de storage
+//   (nesta etapa, filesystem local em ./storage; a camada é abstraída para
+//   permitir troca por object storage no futuro sem alterar o contrato).
+// - Nada é apagado fisicamente: exclusões são "soft" (archivedAt) para preservar
+//   a trilha clínica, exceto quando o profissional confirma a remoção.
+model PatientDocument {
+  id        String @id @default(cuid())
+  patientId String @map("patient_id")
+  // Atendimento ao qual o documento está associado (nullable).
+  appointmentId String? @map("appointment_id")
+
+  // "radiograph" | "intraoral_photo" | "extraoral_photo" | "exam" |
+  // "document" | "other"
+  category String
+  // Rótulo/título exibido (pode diferir do nome do arquivo).
+  title String
+  description String?
+
+  // Metadados do arquivo original (snapshot — o arquivo pode ser renomeado).
+  originalName String @map("original_name")
+  mimeType     String @map("mime_type")
+  sizeBytes    Int    @map("size_bytes")
+  // Caminho/identificador no provedor de storage (relativo, sem expor o disco).
+  storageKey   String @map("storage_key")
+
+  // Dente relacionado (MESMA numeração FDI do odontograma), quando aplicável.
+  toothNumber String? @map("tooth_number")
+  dentition   String?
+
+  // Autor/responsável pelo upload.
+  uploadedById   String? @map("uploaded_by_id")
+  uploadedByName String? @map("uploaded_by_name")
+
+  // Exclusão LÓGICA: preserva o histórico clínico (não apaga o registro).
+  archivedAt DateTime? @map("archived_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  patient     Patient      @relation(fields: [patientId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+
+  @@index([patientId, createdAt])
+  @@index([appointmentId])
+  @@index([patientId, category])
+  @@map("patient_documents")
+}
+
+// ===========================================================================
+// FINANCEIRO — Módulo Financeiro (Parte 11 — Financeiro 1)
+// ===========================================================================
+//
+// PRINCÍPIOS ARQUITETURAIS (obrigatórios)
+//
+// 1) UMA ÚNICA FONTE DE VERDADE POR CONCEITO.
+//
+//    Pagamento realizado  -> `payments` (já existe, criado na Agenda).
+//    Valor previsto       -> `appointments.total_amount` e
+//                            `appointment_procedures.total_price`.
+//    Procedimento/catálogo-> `procedures` (nunca duplicado).
+//    Convênio/plano       -> referenciado, nunca copiado.
+//
+//    Este módulo NÃO cria `financial_payments` nem duplica o catálogo. Ele
+//    cria apenas o que ainda NÃO existe:
+//      * CONVÊNIOS (`insurance_plans` + vínculo do paciente)
+//      * DESPESAS (`expenses` + categorias)
+//      * MOVIMENTAÇÕES FINANCEIRAS (`financial_transactions` como CAMADA DE
+//        CONSOLIDAÇÃO do fluxo — receitas vindas de pagamentos e despesas)
+//
+// 2) PAGAMENTO ≠ MOVIMENTAÇÃO FINANCEIRA.
+//
+//    Um `Payment` é o EVENTO concreto de recebimento ligado a um atendimento.
+//    Uma `FinancialTransaction` é a VISÃO CONSOLIDADA do fluxo de caixa
+//    (receita/despesa) usada por Dashboard, Fluxo de Caixa e Relatórios.
+//    Toda receita consolidada referencia o pagamento de origem (`paymentId`).
+//    Nenhum pagamento é copiado sem origem: `paymentId` é a âncora.
+//
+// 3) NÃO INVENTAR DADOS.
+//
+//    O Dashboard projeta o que existe. Sem receitas => R$ 0,00. Nenhum
+//    registro fictício é criado para preencher gráfico.
+//
+// 4) SINGLE-TENANT + ISOLAMENTO POR RELACIONAMENTO.
+//
+//    Não há `clinicId`/`tenantId` nesta fase (decisão 2-A). O isolamento é
+//    obtido resolvendo SEMPRE o paciente a partir do atendimento/pagamento no
+//    servidor — nunca aceitando `patientId` do cliente como definição de acesso.
+//    A modelagem mantém as tabelas normalizadas e com chaves estáveis para que
+//    um futuro `clinicId` possa ser adicionado sem reescrever o Financeiro.
+//
+// 5) IDENTIDADE TEXTUAL, NÃO AUTENTICAÇÃO.
+//
+//    Campos como `createdByName`, `performedByName`, `cancelledByName` são
+//    ATRIBUIÇÃO (quem fez), no mesmo padrão já usado no restante do sistema
+//    (`finishedByName`, `performedByName`, `uploadedByName`). Eles NÃO são
+//    autenticação e não devem ser tratados como tal. Os campos `*ById` ficam
+//    preparados para uma futura autenticação real, quando existir.
+//
+// 6) VALORES SEPARADOS POR NATUREZA.
+//
+//    previsto / cobrado / recebido / pendente / cancelado / estornado são
+//    conceitos DISTINTOS e não são misturados em um único campo.
+
+// ---------------------------------------------------------------------------
+// CONVÊNIOS / PLANOS DE SAÚDE
+// ---------------------------------------------------------------------------
+// Catálogo de convênios. O paciente PODE ter um convênio; o valor efetivamente
+// cobrado continua vindo de `appointments.total_amount` /
+// `appointment_procedures`, que é a fonte praticada. O convênio existe para
+// registrar a origem/cobertura e permitir relatórios futuros (Financeiro 6),
+// sem alterar os valores clínicos já consolidados.
+model InsurancePlan {
+  id   String @id @default(cuid())
+  name String @unique
+  // "particular" | "convenio" | "plano_odontologico"
+  kind String @default("convenio")
+  // Percentual de cobertura informativo (0-100). NULL = não parametrizado.
+  coveragePercent Float? @map("coverage_percent")
+  // Código ANS / operadora, quando houver.
+  ansCode String? @map("ans_code")
+  notes   String?
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  patients     Patient[]
+  appointments Appointment[]
+
+  @@index([active])
+  @@map("insurance_plans")
+}
+
+// ---------------------------------------------------------------------------
+// CATEGORIAS DE DESPESA
+// ---------------------------------------------------------------------------
+// Categoria é dado de referência (não um campo de texto livre), para permitir
+// agrupamento estável no Dashboard e relatórios. `kind` distingue despesa
+// operacional, de pessoal, de material etc.
+model ExpenseCategory {
+  id   String @id @default(cuid())
+  name String @unique
+  // "operacional" | "pessoal" | "material" | "infraestrutura" | "impostos"
+  // | "marketing" | "outros"
+  kind String @default("operacional")
+  // Categoria de sistema NÃO pode ser excluída pela UI (preserva relatórios).
+  system Boolean @default(false)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  expenses Expense[]
+
+  @@index([active])
+  @@map("expense_categories")
+}
+
+// ---------------------------------------------------------------------------
+// DESPESAS (contas a pagar / saídas)
+// ---------------------------------------------------------------------------
+// DESPESA ≠ MOVIMENTAÇÃO. A despesa é o compromisso registrado (o que se deve
+// ou se pagou a um fornecedor). A movimentação financeira é a visão consolidada
+// de caixa. Uma despesa PAGA gera/atualiza uma movimentação de saída.
+//
+// `status`:
+//   "pending"  -> agendada/reconhecida, ainda não paga (conta a pagar)
+//   "paid"     -> quitada (gera movimentação de saída)
+//   "cancelled"-> cancelada (não entra em nenhum total)
+model Expense {
+  id String @id @default(cuid())
+
+  // Categoria de referência (nunca texto livre).
+  categoryId String @map("category_id")
+
+  // Descrição curta do lançamento.
+  description String
+  // Fornecedor/beneficiário (texto; não há cadastro de fornecedores nesta fase).
+  supplier String?
+
+  // VALOR PREVISTO/COBRADO da despesa (valor nominal do lançamento).
+  amount Float
+
+  // "pending" | "paid" | "cancelled"
+  status String @default("pending")
+
+  // Competência (a que período a despesa se refere).
+  competenceDate DateTime @map("competence_date")
+  // Vencimento (conta a pagar).
+  dueDate DateTime? @map("due_date")
+  // Quitação efetiva.
+  paidAt DateTime? @map("paid_at")
+
+  // Forma de pagamento utilizada na quitação (mesmo vocabulário de `payments`).
+  paymentMethod String? @map("payment_method")
+
+  notes String?
+
+  // Vincular a um atendimento é OPCIONAL: uma despesa pode ser geral
+  // (aluguel, energia) e não pertencer a um atendimento específico.
+  appointmentId String? @map("appointment_id")
+
+  // Paciente relacionado (OPCIONAL): despesas gerais não têm paciente.
+  // Quando houver, é resolvido no servidor — nunca definido pelo cliente.
+  patientId String? @map("patient_id")
+
+  // ATRIBUIÇÃO (não autenticação): quem registrou / quem quitou.
+  createdById   String? @map("created_by_id")
+  createdByName String? @map("created_by_name")
+  paidById      String? @map("paid_by_id")
+  paidByName    String? @map("paid_by_name")
+
+  // Cancelamento preserva o registro (não há exclusão física).
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelledById   String?   @map("cancelled_by_id")
+  cancelledByName String?   @map("cancelled_by_name")
+  cancelReason    String?   @map("cancel_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  category    ExpenseCategory  @relation(fields: [categoryId], references: [id])
+  appointment Appointment?      @relation(fields: [appointmentId], references: [id])
+  patient     Patient?          @relation(fields: [patientId], references: [id])
+  transactions FinancialTransaction[]
+
+  payments ExpensePayment[]
+  logs     ExpenseLog[]
+
+  @@index([status, competenceDate])
+  @@index([categoryId, competenceDate])
+  @@index([dueDate])
+  @@index([appointmentId])
+  @@index([patientId])
+  @@map("expenses")
+}
+
+// ---------------------------------------------------------------------------
+// PAGAMENTOS DE DESPESA
+// ---------------------------------------------------------------------------
+// Uma despesa pode ter MÚLTIPLOS pagamentos (parciais). Cada pagamento é
+// individualmente rastreável com data, método e responsável.
+// NUNCA sobrescrever pagamentos anteriores.
+model ExpensePayment {
+  id        String   @id @default(cuid())
+  expenseId String   @map("expense_id")
+
+  // Valor DESTE pagamento (parcial ou total).
+  amount Float
+
+  // Método de pagamento (mesmo vocabulário de payments).
+  paymentMethod String @map("payment_method")
+
+  // Data em que o pagamento foi efetivamente realizado.
+  paidAt DateTime @map("paid_at")
+
+  // Observação específica deste pagamento.
+  notes String?
+
+  // ATRIBUIÇÃO (não autenticação): quem registrou o pagamento.
+  paidById   String? @map("paid_by_id")
+  paidByName String? @map("paid_by_name")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  expense Expense @relation(fields: [expenseId], references: [id])
+
+  @@index([expenseId, paidAt])
+  @@map("expense_payments")
+}
+
+// ---------------------------------------------------------------------------
+// LOG DE AUDITORIA DE DESPESA
+// ---------------------------------------------------------------------------
+// Registra eventos relevantes: criação, edição, pagamento, cancelamento.
+// Preserva o histórico completo para auditoria e exibição no detalhamento.
+model ExpenseLog {
+  id        String @id @default(cuid())
+  expenseId String @map("expense_id")
+
+  // Tipo do evento: "created" | "updated" | "payment" | "paid" | "cancelled"
+  event String
+
+  // Descrição legível do que aconteceu.
+  description String
+
+  // Valor anterior e novo, quando aplicável (ex.: alteração de valor/vencimento).
+  oldValue String? @map("old_value")
+  newValue String? @map("new_value")
+
+  // Responsável pelo evento.
+  performedById   String? @map("performed_by_id")
+  performedByName String? @map("performed_by_name")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  expense Expense @relation(fields: [expenseId], references: [id])
+
+  @@index([expenseId, createdAt])
+  @@map("expense_logs")
+}
+
+// ---------------------------------------------------------------------------
+// MOVIMENTAÇÕES FINANCEIRAS (camada de CONSOLIDAÇÃO do fluxo de caixa)
+// ---------------------------------------------------------------------------
+// Esta é a VISÃO CONSOLIDADA usada por Dashboard, Fluxo de Caixa e Relatórios.
+// Ela NÃO substitui `payments` nem `expenses`: ela os referencia.
+//
+// REGRA DE OURO (não duplicação):
+//   * Receita  -> SEMPRE originada de um `Payment` (`paymentId` obrigatório).
+//                 Não existe receita sem pagamento de origem.
+//   * Despesa  -> SEMPRE originada de um `Expense` (`expenseId` obrigatório).
+//
+// `direction`:
+//   "in"  -> entrada (receita)
+//   "out" -> saída (despesa)
+//
+// `status`:
+//   "pending"   -> prevista/em aberto, ainda não efetivada no caixa
+//   "settled"   -> efetivada (dinheiro entrou/saiu)
+//   "cancelled" -> cancelada (não entra em nenhum total)
+//   "reversed"  -> estornada (entrou/saiu e foi revertida)
+//
+// O `patientId` é DENORMALIZADO de propósito (resolvido no servidor a partir
+// do pagamento/atendimento) para permitir consultas de fluxo por paciente sem
+// joins profundos. Ele NUNCA é aceito do cliente como definição de acesso.
+model FinancialTransaction {
+  id String @id @default(cuid())
+
+  // "in" | "out"
+  direction String
+
+  // Valor da movimentação (positivo). O sinal vem de `direction`, nunca do valor.
+  amount Float
+
+  // "pending" | "settled" | "cancelled" | "reversed"
+  status String @default("pending")
+
+  // Data de competência da movimentação (base dos agrupamentos do Dashboard).
+  competenceDate DateTime @map("competence_date")
+  // Data efetiva de caixa (quando liquidada).
+  settledAt DateTime? @map("settled_at")
+
+  // Descrição consolidada (derivada do pagamento/despesa de origem).
+  description String
+
+  // --- ORIGEM (exatamente uma das duas) ---
+  paymentId String? @unique @map("payment_id")
+  expenseId String? @map("expense_id")
+
+  // --- CONTEXTO (resolvido no servidor, nunca do cliente) ---
+  patientId     String? @map("patient_id")
+  appointmentId String? @map("appointment_id")
+
+  // Forma de pagamento (herdada do pagamento quando receita).
+  paymentMethod String? @map("payment_method")
+
+  // Estorno (preserva o registro original; nada é apagado).
+  reversedAt     DateTime? @map("reversed_at")
+  reverseReason  String?   @map("reverse_reason")
+  reversedByName String?   @map("reversed_by_name")
+
+  // ATRIBUIÇÃO (não autenticação).
+  createdById   String? @map("created_by_id")
+  createdByName String? @map("created_by_name")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  payment   Payment?    @relation(fields: [paymentId], references: [id])
+  expense   Expense?    @relation(fields: [expenseId], references: [id])
+  patient   Patient?    @relation(fields: [patientId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
+
+  @@index([direction, status, competenceDate])
+  @@index([status, competenceDate])
+  @@index([patientId, competenceDate])
+  @@index([appointmentId])
+  @@index([expenseId])
+  @@map("financial_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// MÓDULO DE CONFIGURAÇÕES: USUÁRIOS E PROFISSIONAIS
+// ---------------------------------------------------------------------------
+model Professional {
+  id            String   @id @default(cuid())
+  fullName      String   @map("full_name")
+  birthDate     DateTime @map("birth_date")
+  cpf           String   @unique
+  councilType   String   @map("council_type")
+  councilNumber String   @map("council_number")
+  councilState  String?  @map("council_state")
+  status        String   @default("active") // "active" | "inactive"
+
+  // Relação opcional com User (usuário de acesso).
+  // Um profissional pode estar associado a no máximo um usuário.
+  user User?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([cpf])
+  @@index([status])
+  @@index([councilType])
+  @@map("professionals")
+}
+
+// ===========================================================================
+// AUTENTICAÇÃO E PERMISSÕES — Configurações
+// ===========================================================================
+//
+// Separação conceitual obrigatória:
+//
+// 1) USER (usuário de acesso) — credenciais de login, sessão e perfil de
+//    autorização. Um usuário pode (opcionalmente) estar associado a um
+//    PROFISSIONAL cadastrado, permitindo que o sistema identifique quem
+//    está realizando cada operação clínica e vincule a identidade
+//    profissional do usuário.
+//
+// 2) ROLE (perfil de acesso) — agrupamento de permissões. Cada usuário
+//    possui um role (ex.: ADMINISTRADOR, DENTISTA, RECEPCAO).
+//
+// 3) PERMISSION (permissão atômica) — autorização granular por módulo/
+//    ação. Associada a roles via RolePermission.
+//
+// Em contraste com o modelo Professional (que é um cadastro de identidade
+// profissional e clínica), o User é a ENTIDADE DE ACESSO AO SISTEMA.
+// Ambos coexistem: um User pode ter um professionalId opcional que o
+// vincula ao cadastro de Professional existente.
+
+// Usuário de acesso ao sistema. Não confundir com Professional (cadastro
+// de identidade profissional clínica). O usuário possui credenciais de
+// login e pode estar associado opcionalmente a um profissional.
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  // Perfil de acesso: "ADMINISTRADOR" | "DENTISTA" | "RECEPCAO"
+  role  String  @default("DENTISTA")
+  active Boolean @default(true)
+
+  // Associação opcional com um profissional cadastrado.
+  // Quando preenchido, o sistema utiliza os dados do profissional para
+  // identificar quem realizou as operações clínicas.
+  professionalId String? @unique @map("professional_id")
+
+  // Timestamps de auditoria.
+  lastLoginAt DateTime? @map("last_login_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  professional Professional? @relation(fields: [professionalId], references: [id])
+
+  @@index([username])
+  @@index([active])
+  @@map("users")
+}
+
+// Role (perfil de acesso) — agrupamento de permissões do sistema.
+// Define quais ações cada perfil pode executar.
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  // "system" — não pode ser excluído pela interface
+  system      Boolean  @default(false)
+  active      Boolean  @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  permissions RolePermission[]
+
+  @@index([active])
+  @@map("roles")
+}
+
+// Permissão atômica do sistema. Cada permissão representa uma ação
+// específica em um módulo, usada pelo RBAC para autorização granular.
+model Permission {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  // Módulo ao qual a permissão pertence (ex.: "agenda", "pacientes", "financeiro")
+  module      String
+  // "read" | "write" | "delete" | "admin"
+  action      String   @default("write")
+  active      Boolean  @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  roles RolePermission[]
+
+  @@index([module, action])
+  @@index([code])
+  @@map("permissions")
+}
+
+// Relação N:N entre Role e Permission.
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ---------------------------------------------------------------------------
+// FECHAMENTO FINANCEIRO (Financeiro 6 — Relatórios e Fechamento)
+// ---------------------------------------------------------------------------
+// O fechamento NÃO é uma nova fonte de verdade financeira: é a CONFIRMAÇÃO de
+// que um período foi revisado e encerrado, com um SNAPSHOT dos totais do
+// momento do fechamento. Os números continuam vindo dos serviços financeiros
+// existentes (`payments`, `expense_payments`, `expenses`, projeções); o
+// fechamento apenas os congela para auditoria e para detectar alterações
+// retroativas.
+//
+// `status`: "closed" | "reopened". A reabertura NÃO apaga o registro — ela o
+// marca como reaberto, preservando o snapshot e o motivo em `closing_logs`.
+model FinancialClosing {
+  id String @id @default(cuid())
+
+  // Período fechado (início e último instante do dia final).
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+
+  // "closed" | "reopened"
+  status String @default("closed")
+
+  // SNAPSHOT dos totais no momento do fechamento (nunca recalculado aqui).
+  snapshotIncome          Float @default(0) @map("snapshot_income")
+  snapshotExpense         Float @default(0) @map("snapshot_expense")
+  snapshotPeriodBalance   Float @default(0) @map("snapshot_period_balance")
+  snapshotOpeningBalance  Float @default(0) @map("snapshot_opening_balance")
+  snapshotClosingBalance  Float @default(0) @map("snapshot_closing_balance")
+  snapshotReceivable      Float @default(0) @map("snapshot_receivable")
+  snapshotPayable         Float @default(0) @map("snapshot_payable")
+  snapshotResult          Float @default(0) @map("snapshot_result")
+  snapshotIncomeCount     Int   @default(0) @map("snapshot_income_count")
+  snapshotExpenseCount    Int   @default(0) @map("snapshot_expense_count")
+
+  notes String?
+
+  // ATRIBUIÇÃO (não autenticação).
+  closedById   String?   @map("closed_by_id")
+  closedByName String?   @map("closed_by_name")
+  closedAt     DateTime  @default(now()) @map("closed_at")
+
+  // Reabertura (preserva o registro original).
+  reopenedAt     DateTime? @map("reopened_at")
+  reopenedById   String?   @map("reopened_by_id")
+  reopenedByName String?   @map("reopened_by_name")
+  reopenReason   String?   @map("reopen_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  logs FinancialClosingLog[]
+
+  @@unique([periodStart, periodEnd])
+  @@index([status, periodStart])
+  @@map("financial_closings")
+}
+
+// ---------------------------------------------------------------------------
+// LOG DE AUDITORIA DO FECHAMENTO
+// ---------------------------------------------------------------------------
+// Registra TODA ação sobre um fechamento: criação (closed) e reabertura
+// (reopened). A reabertura exige motivo, gravado em `reason`.
+model FinancialClosingLog {
+  id        String @id @default(cuid())
+  closingId String @map("closing_id")
+
+  // "closed" | "reopened"
+  event String
+
+  description String
+
+  // Motivo (obrigatório na reabertura) e snapshot textual anterior/novo.
+  reason   String?
+  oldValue String? @map("old_value")
+  newValue String? @map("new_value")
+
+  // ATRIBUIÇÃO (não autenticação).
+  performedById   String? @map("performed_by_id")
+  performedByName String? @map("performed_by_name")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  closing FinancialClosing @relation(fields: [closingId], references: [id], onDelete: Cascade)
+
+  @@index([closingId, createdAt])
+  @@map("financial_closing_logs")
+}
+
+// ===========================================================================
+// CONFIG — Feature flags e configurações do sistema
+// ===========================================================================
+// Permite ativar/desativar recursos sem deploy.
+// Exemplos de chaves: auth_required, permissions_enabled, max_login_attempts
+// ===========================================================================
+model Config {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("config")
+}

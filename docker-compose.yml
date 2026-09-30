@@ -1,0 +1,73 @@
+# ===========================================================================
+# DOCKER COMPOSE — OdontoCare (uso LOCAL e referência de variáveis)
+# ===========================================================================
+#
+# Este arquivo serve para TESTAR a imagem de produção localmente e para
+# documentar as variáveis de ambiente que o EasyPanel precisa.
+#
+# IMPORTANTE: no EasyPanel você NÃO usa este compose diretamente — o painel
+# constrói a imagem a partir do GitHub e gerencia banco/volume pela UI. Este
+# arquivo é o espelho fiel do que deve ser configurado lá.
+#
+# Uso local:
+#   docker compose up --build
+#   Acesse http://localhost:3000
+#
+# Encerrar e apagar dados locais:
+#   docker compose down -v
+# ===========================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: clinica
+      POSTGRES_PASSWORD: clinica_local_dev
+      POSTGRES_DB: clinica
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinica -d clinica"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      # Exposto apenas para inspeção local; remova em produção.
+      - "5432:5432"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Aponta para o serviço `db` acima. No EasyPanel, use a connection
+      # string interna do Postgres criado no painel.
+      DATABASE_URL: "postgresql://clinica:clinica_local_dev@db:5432/clinica?schema=public"
+      # Segredo de sessão. Gere um próprio: openssl rand -base64 32
+      AUTH_SECRET: "troque-este-segredo-antes-de-producao-0000000000"
+      # URL pública do app (usada em links absolutos/redirects).
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+      # Google OAuth (opcional). Deixe vazio para desabilitar o botão.
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      # Diretório de arquivos clínicos (mapeado no volume abaixo).
+      STORAGE_PATH: "/data/storage"
+      NODE_ENV: "production"
+      PORT: "3000"
+      # Aplicar seed idempotente a cada boot (roles, admin inicial, catálogo).
+      RUN_SEED_ON_BOOT: "true"
+    volumes:
+      # Volume persistente para documentos/imagens clínicas (dado sensível).
+      - app_storage:/data/storage
+    ports:
+      - "3000:3000"
+
+volumes:
+  db_data:
+  app_storage:

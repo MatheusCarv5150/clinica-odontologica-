@@ -1,0 +1,74 @@
+# ===========================================================================
+# .dockerignore — OdontoCare
+# ===========================================================================
+# Tudo que NÃO deve entrar no contexto de build da imagem Docker.
+# Reduz o tamanho da imagem e evita vazar segredos/artefatos locais.
+# ===========================================================================
+
+# Dependências e build (reinstalados dentro do container)
+node_modules
+.next
+out
+build
+dist
+
+# Segredos e variáveis de ambiente (NUNCA dentro da imagem)
+.env
+.env.*
+!.env.example
+
+# Bancos locais e backups (o banco de produção vive no PostgreSQL)
+*.db
+*.db-journal
+*.db.backup
+prisma/*.db
+prisma/*.db-journal
+prisma/*.db.backup
+prisma/dev.db*
+prisma/node_modules
+prisma/pg-schema
+
+# Histórico de migrations que NÃO é o ativo (evita confusão no migrate).
+# O Prisma lê sempre `prisma/migrations`; as demais são arquivo/backup.
+prisma/migrations-sqlite.bak
+prisma/migrations-pg
+
+# Schemas alternativos (SQLite/dev) não usados em produção.
+prisma/schema.sqlite.prisma.bak
+prisma/schema.postgres.prisma
+
+# Scripts de migração local (PowerShell) não fazem parte do runtime.
+scripts/_migration
+
+# Artefatos de teste/scratch (diretórios temporários criados pelos harnesses)
+.*-test-*/
+.tmp/
+
+# Logs e relatórios de desenvolvimento
+*.log
+*-out.txt
+*-output.txt
+*-err.txt
+lint-*.txt
+typecheck-*.txt
+build-*.txt
+verify-output.txt
+final-report.txt
+prof.log
+
+# Sistema de arquivos / editor
+.git
+.gitignore
+.vscode
+.DS_Store
+
+# Documentação e artefatos de repositório que não afetam o runtime
+README.md
+docs
+CLAUDE.md
+AGENTS.md
+
+# Certificados privados e chaves
+*.pem
+*.key
+*.crt

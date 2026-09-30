@@ -1,0 +1,101 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+# .env / .env.local / etc. NUNCA devem ser versionados.
+# O MODELO `!.env.example` (abaixo) É versionado de propósito: só contém
+# nomes de variáveis e valores de exemplo, nunca segredos reais.
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# banco local e backups
+/prisma/*.db.backup
+/prisma/dev.db-journal
+/prisma/*.db
+/prisma/*.db-journal
+/prisma/*.db.financeiro-backup
+/prisma/*.db.normalization-backup
+/prisma/node_modules
+
+# Histórico de migrations que NÃO é o ativo (Prisma lê sempre /prisma/migrations)
+/prisma/migrations-sqlite.bak
+/prisma/migrations-pg
+/prisma/pg-schema
+
+# Schemas alternativos (SQLite/dev) usados apenas localmente
+/prisma/schema.sqlite.prisma.bak
+/prisma/schema.postgres.prisma
+
+# STORAGE — documentos e imagens clínicas dos pacientes.
+# Dado sensível de saúde (LGPD): nunca deve ir para o repositório.
+/storage
+
+# ---------------------------------------------------------------------------
+# SEGURANÇA — arquivos que NUNCA devem ser versionados
+# ---------------------------------------------------------------------------
+# Ferramentas e artefatos da migração SQLite -> Postgres. Contêm strings de
+# conexão com credenciais, dumps da base e relatórios internos.
+/scripts/_migration/
+
+# Logs e relatórios de desenvolvimento (saída de lint/typecheck/build/verify).
+/scripts/*.txt
+/scripts/*-err.txt
+
+# artefatos temporários dos testes da anamnese
+/.anamnesis-test-*/
+/.domain-check-*/
+/.financial-test-*/
+/.part10-test-*/
+/.procedures-test-*/
+/.odontogram-test-*/
+/.evolution-test-*/
+/.finalization-test-*/
+
+# artefatos de log/relatório gerados por build/lint/typecheck
+/*-out.txt
+/*-output.txt
+/*-err.txt
+/lint-*.txt
+/typecheck-*.txt
+/build-*.txt
+/verify-output.txt
+/final-report.txt
+/*.log
+/prof.log
+/.tmp/

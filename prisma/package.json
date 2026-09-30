@@ -1,0 +1,4 @@
+{
+  "//": "Escopa a pasta prisma/ para ES Modules. Os seeds (seed.production.js / seed.js) usam `import`, então precisam ser tratados como ESM. Sem este arquivo, `node prisma/seed.production.js` falha com 'Cannot use import statement outside a module' porque o package.json raiz não define \"type\": \"module\".",
+  "type": "module"
+}

@@ -1,0 +1,52 @@
+-- ===========================================================================
+-- PARTE 9 — Colunas do ciclo de atendimento em `appointments`
+-- ===========================================================================
+--
+-- ADITIVA E NÃO DESTRUTIVA.
+--
+-- Esta migration adiciona as quatro colunas do ciclo de atendimento que a
+-- Parte 9 utiliza:
+--
+--   started_at        TIMESTAMP(3)  (início do atendimento, gravado no servidor)
+--   finished_at       TIMESTAMP(3)  (encerramento, gravado no servidor)
+--   finished_by_id    TEXT      (atribuição — preparado para autenticação real)
+--   finished_by_name  TEXT      (atribuição textual do responsável)
+--
+-- Todas são NULLABLE: atendimentos existentes permanecem válidos e nenhum
+-- dado é inventado para preencher registros antigos.
+--
+-- ─── ESTRATÉGIA PARA O BANCO ATUAL ─────────────────────────────────────────
+--
+-- A forma portável de adicionar colunas em SQLite é `ALTER TABLE ... ADD
+-- COLUMN`, que é aditivo e preserva todos os dados e índices. Porém o Prisma
+-- exige que o arquivo de migration seja determinístico (sem SQL condicional),
+-- e `ADD COLUMN` falha se a coluna já existir.
+--
+-- Esta migration NÃO é executada sobre o banco de desenvolvimento atual: a
+-- migration imediatamente anterior
+-- (20260919120000_normalize_appointment_evolution_finalization_part6_part9)
+-- já formalizou o estado real, no qual as quatro colunas JÁ EXISTEM. O
+-- `dev.db` é reconciliado por `prisma migrate resolve --applied` (ver
+-- docs/FINANCEIRO-ETAPA2-NORMALIZACAO.md), justamente para não executar DDL
+-- redundante e nunca reconstruir a tabela.
+--
+-- Em um banco NOVO, criado do zero pelo histórico completo, as colunas também
+-- já chegam prontas — porque a migration da Parte 9 acima as documenta e este
+-- arquivo é registrado como aplicado.
+--
+-- Ou seja: este arquivo existe para manter o histórico coerente e legível,
+-- sem introduzir qualquer operação destrutiva. A coluna legada
+-- `appointments.evolution` permanece intocada.
+
+-- As colunas são declaradas no schema.prisma como:
+--
+--   startedAt      DateTime? @map("started_at")
+--   finishedAt     DateTime? @map("finished_at")
+--   finishedById   String?   @map("finished_by_id")
+--   finishedByName String?   @map("finished_by_name")
+--
+-- Nenhum ALTER TABLE é executado aqui de propósito: o estado real do banco já
+-- contém as colunas e a regra da normalização é não executar DDL redundante.
+-- A declaração abaixo é apenas um no-op válido para SQLite, garantindo que o
+-- arquivo contenha SQL executável e nunca falhe em um banco novo.
+SELECT 1 WHERE 1 = 0;
