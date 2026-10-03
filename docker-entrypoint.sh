@@ -19,14 +19,9 @@ set -e
 
 echo "[entrypoint] Iniciando OdontoCare em modo produção..."
 
-# Caminho explícito do Prisma CLI (instalado em node_modules do runner).
-PRISMA_CLI="./node_modules/prisma/build/index.js"
-
 # ---------------------------------------------------------------------------
 # 1) Espera pelo banco.
 # ---------------------------------------------------------------------------
-# O EasyPanel pode subir o container do app antes do Postgres estar pronto.
-# Tenta conectar por até ~60s antes de desistir.
 if [ -n "$DATABASE_URL" ]; then
   echo "[entrypoint] Aguardando o banco de dados aceitar conexões..."
   ATTEMPTS=0
@@ -46,17 +41,54 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2) Migrations.
+# 2) Migrations (db push).
 # ---------------------------------------------------------------------------
 echo "[entrypoint] Sincronizando schema com db push..."
-node "$PRISMA_CLI" db push --skip-generate
+npx prisma db push --skip-generate
 
 # ---------------------------------------------------------------------------
 # 3) Seed idempotente.
 # ---------------------------------------------------------------------------
 if [ "${RUN_SEED_ON_BOOT:-true}" = "true" ]; then
   echo "[entrypoint] Executando seed idempotente..."
-  if node prisma/seed.production.js; then
+  if node --input-type=module -e "
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+async function main() {
+  // Roles
+  const adminRole = await prisma.role.upsert({
+    where: { nome: 'ADMINISTRADOR' },
+    update: {},
+    create: { nome: 'ADMINISTRADOR', descricao: 'Acesso total ao sistema' }
+  });
+  const atendenteRole = await prisma.role.upsert({
+    where: { nome: 'ATENDENTE' },
+    update: {},
+    create: { nome: 'ATENDENTE', descricao: 'Acesso a agendamento e pacientes' }
+  });
+  const dentistaRole = await prisma.role.upsert({
+    where: { nome: 'DENTISTA' },
+    update: {},
+    create: { nome: 'DENTISTA', descricao: 'Acesso a atendimento e procedimentos' }
+  });
+
+  // Admin user
+  const bcrypt = require('bcryptjs');
+  const adminExists = await prisma.usuario.findFirst({ where: { login: 'administrador' } });
+  if (!adminExists) {
+    const hash = await bcrypt.hash('123456', 10);
+    await prisma.usuario.create({
+      data: { login: 'administrador', senha: hash, nome: 'Administrador', roleId: adminRole.id, ativo: true }
+    });
+    console.log('[seed] Usuário administrador criado (login: administrador / senha: 123456)');
+  } else {
+    console.log('[seed] Usuário administrador já existe, pulando.');
+  }
+
+  console.log('[seed] Seed concluído com sucesso.');
+}
+main().catch(e => { console.error(e); process.exit(1); }).finally(() => prisma.\$disconnect());
+"; then
     echo "[entrypoint] Seed concluído."
   else
     echo "[entrypoint] AVISO: seed falhou, mas isso não impede o boot. Verifique os logs."

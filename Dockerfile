@@ -104,6 +104,12 @@ COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
 COPY --from=builder /app/node_modules/@prisma/engines ./node_modules/@prisma/engines
 
+# bcryptjs: necessário para o seed inline (hash de senha).
+COPY --from=builder /app/node_modules/bcryptjs ./node_modules/bcryptjs
+
+# .bin com links simbólicos para npx encontrar os binários
+COPY --from=builder /app/node_modules/.bin ./node_modules/.bin
+
 # Script de entrada: espera o banco, aplica migrations, roda seed e sobe o app.
 COPY --from=builder /app/docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
